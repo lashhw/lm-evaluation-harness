@@ -6,5 +6,4 @@ lm_eval run \
   --apply_chat_template \
   --fewshot_as_multiturn \
   --output_path results \
-  --limit 1 \
-  --log_samples
+  "$@"
