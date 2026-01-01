@@ -648,6 +648,9 @@ def evaluate(
                         "filtered_resps": [
                             req.filtered_resps[filter_key] for req in requests
                         ],
+                        "kv_cache_stats": [
+                            getattr(req, "kv_cache_stats", None) for req in requests
+                        ],
                         "filter": filter_key,
                         "metrics": list(metrics.keys()),
                         "doc_hash": hash_string(

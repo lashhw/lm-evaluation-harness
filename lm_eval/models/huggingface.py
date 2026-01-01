@@ -973,7 +973,7 @@ class HFLM(TemplateLM):
         max_length: int,
         stop: list[str],
         **generation_kwargs,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict | None]:
         # temperature = 0.0 if not set
         # if do_sample is false and temp==0.0:
         # remove temperature, as do_sample=False takes care of this
@@ -987,6 +987,10 @@ class HFLM(TemplateLM):
 
         if do_sample is False and generation_kwargs.get("temperature") == 0.0:
             generation_kwargs.pop("temperature")
+
+        past_key_values = transformers.DynamicCache()
+        generation_kwargs["past_key_values"] = past_key_values
+
         # build stopping criteria
         stopping_criteria = stop_sequences_criteria(
             self.tokenizer, stop, context.shape[1], context.shape[0]
@@ -996,7 +1000,7 @@ class HFLM(TemplateLM):
             dtype=self.mixed_precision_dtype,
             enabled=self.mixed_precision_dtype is not None,
         ):
-            return self.model.generate(
+            outputs = self.model.generate(
                 input_ids=context,
                 max_length=max_length,
                 stopping_criteria=stopping_criteria,
@@ -1004,6 +1008,17 @@ class HFLM(TemplateLM):
                 use_cache=True,
                 **generation_kwargs,
             )
+
+        kv_cache_stats = None
+        if hasattr(past_key_values, "next_free_block"):
+            total_tokens_in_kv_cache = past_key_values.next_free_block * self.config.block_size
+            average_tokens_in_kv_cache = total_tokens_in_kv_cache / (self.config.num_hidden_layers * self.config.num_key_value_heads)
+            kv_cache_stats = {
+                "average_tokens_in_kv_cache": average_tokens_in_kv_cache,
+                "total_sequence_length": outputs.size(1),
+            }
+
+        return outputs, kv_cache_stats
 
     def _select_cont_toks(
         self,
@@ -1370,6 +1385,7 @@ class HFLM(TemplateLM):
         self, requests: list[Instance], disable_tqdm: bool = False
     ) -> list[str]:
         res = []
+        stats = []
 
         def _collate(req: tuple[str, dict]):
             """Defines the key for the sorted method"""
@@ -1463,7 +1479,7 @@ class HFLM(TemplateLM):
                 kwargs["max_length"] = context_enc.shape[1] + max_gen_toks
 
             # perform batched generation
-            cont = self._model_generate(
+            cont, batch_stats = self._model_generate(
                 context=context_enc,
                 attention_mask=attn_masks,
                 stop=until,
@@ -1501,11 +1517,18 @@ class HFLM(TemplateLM):
                     else None,
                 )
                 res.append(s)
+                stats.append(batch_stats)
 
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), s)
                 pbar.update(1)
         # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)
+        stats = re_ords.get_original(stats)
+
+        for req, stat in zip(requests, stats, strict=True):
+            if not hasattr(req, "kv_cache_stats"):
+                req.kv_cache_stats = []
+            req.kv_cache_stats.append(stat)
 
         pbar.close()
 
