@@ -1016,7 +1016,7 @@ class HFLM(TemplateLM):
             kv_cache_stats = {
                 "average_tokens_in_kv_cache": average_tokens_in_kv_cache,
                 "total_sequence_length": outputs.size(1),
-                "snapkv_evict_count": past_key_values.snapkv_evict_count,
+                "snapkv_evict_count": getattr(past_key_values, "snapkv_evict_count", None),
             }
 
         return outputs, kv_cache_stats
